@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Sensor Data</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@1.2.1/dist/chartjs-plugin-zoom.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+
+    
+    <style>
+        /* Make html/body fill the browser window. Remove default margins. */
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;  /* Make the body fill the full viewport height. */
+        }
+        
+        /* Use flex layout for the body so the header + chart container can share vertical space. */
+        body {
+            display: flex;
+            flex-direction: column; /* Stack header (h1) on top, then the charts container. */
+            font-family: sans-serif; /* or your desired font */
+        }
+        
+        /* Header grows only as large as needed for the text. */
+        h1 {
+            margin: 0;       /* Remove default margin so it doesn't eat up extra space. */
+            padding: 20px;   /* Some breathing room around the text. */
+            text-align: center;
+            background-color: #f0f0f0; /* Slight gray background, optional. */
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1); /* Subtle shadow, optional. */
+        }
+        
+        /* The chart-container takes all remaining space after the header. */
+        .chart-container {
+            display: flex;
+            flex-direction: column;  /* Stack charts vertically */
+            flex: 1;                 /* Occupy leftover vertical space in the body */
+        }
+        
+        /* Each chart-wrapper will share that space equally. 
+        If you have 2 chart-wrappers, each will be 50% of .chart-container's height. */
+        .chart-wrapper {
+            flex: 1;                  /* Share the space equally among wrappers */
+            position: relative;       /* Needed so the canvas can size to fill it */
+        }
+        
+        /* Make the canvas fill its .chart-wrapper parent entirely. */
+        canvas {
+            position: absolute;       /* Position absolutely within .chart-wrapper */
+            top: 0; right: 0; bottom: 0; left: 0;
+            width: 100%; 
+            height: 100%;
+        }
+    </style>
+</head>
+
+<body>
+    
+    <h1>Temperature and Hardness</h1>
+    
+    <div class="chart-container">
+        <div class="chart-wrapper">
+            <canvas id="myChartTemp"></canvas>
+        </div>
+        <div class="chart-wrapper">
+            <canvas id="myChartTDS"></canvas>
+        </div>
+    </div>
+    
+    
+    <script>
+        async function fetchTemperatureData() {
+            const response = await fetch('/data');
+            if (!response.ok) {
+                throw new Error(`Error fetching temperature data: ${response.statusText}`);
+            }
+            return await response.json(); // array of { time, temperature }
+        }
+        
+        async function fetchTDSData() {
+            const response = await fetch('/data_tds');
+            if (!response.ok) {
+                throw new Error(`Error fetching TDS data: ${response.statusText}`);
+            }
+            return await response.json(); // array of { time, tds }
+        }
+        
+        let tempChart;  // Global variable to hold the temperature chart instance
+        let tdsChart;   // Global variable to hold the TDS chart instance
+        
+        async function updateCharts() {
+            try {
+                const [tempData, tdsData] = await Promise.all([
+                fetchTemperatureData(),
+                fetchTDSData()
+                ]);
+                
+                // Destroy existing temperature chart if it exists
+                if (tempChart) {
+                    tempChart.destroy();
+                }
+                tempChart = renderTempChart(tempData);
+                
+                // Destroy existing TDS chart if it exists
+                if (tdsChart) {
+                    tdsChart.destroy();
+                }
+                tdsChart = renderTDSChart(tdsData);
+            } catch (err) {
+                console.error(err);
+            }
+        }
+        
+        function renderTempChart(data) {
+            const ctx = document.getElementById('myChartTemp').getContext('2d');
+            const labels = data.map(d => new Date(d.time * 1000));
+            const values = data.map(d => d.temperature);
+            
+            // Calculate the default view: last hour
+            const now = Date.now();
+            const oneHourAgo = now - 3600000; // 1 hour in milliseconds
+            
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Temperature (°C)',
+                        data: values,
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        borderWidth: 2,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: { unit: 'minute' }, // or 'hour', depending on your data granularity
+                            min: oneHourAgo,
+                            max: now,
+                            title: { display: true, text: 'Time' }
+                        },
+                        y: {
+                            title: { display: true, text: 'Temperature (°C)' }
+                        }
+                    },
+                    plugins: {
+                        zoom: {
+                            pan: {
+                                enabled: true,
+                                mode: 'x'
+                            },
+                            zoom: {
+                                wheel: {
+                                    enabled: true
+                                },
+                                pinch: {
+                                    enabled: true
+                                },
+                                mode: 'x'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        function renderTDSChart(data) {
+            const ctx = document.getElementById('myChartTDS').getContext('2d');
+            const labels = data.map(d => new Date(d.time * 1000));
+            const values = data.map(d => d.tds);
+            
+            // Calculate the default view: last hour
+            const now = Date.now();
+            const oneHourAgo = now - 3600000; // 1 hour in milliseconds
+            
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'TDS (ppm)',
+                        data: values,
+                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 2,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: { unit: 'minute' },
+                            min: oneHourAgo,
+                            max: now,
+                            title: { display: true, text: 'Time' }
+                        },
+                        y: {
+                            title: { display: true, text: 'TDS (ppm)' }
+                        }
+                    },
+                    plugins: {
+                        zoom: {
+                            pan: {
+                                enabled: true,
+                                mode: 'x'
+                            },
+                            zoom: {
+                                wheel: {
+                                    enabled: true
+                                },
+                                pinch: {
+                                    enabled: true
+                                },
+                                mode: 'x'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Initially update charts, then refresh every 30 seconds
+        updateCharts();
+        setInterval(updateCharts, 30000);
+        
+    </script>      
+</body>
+</html>
