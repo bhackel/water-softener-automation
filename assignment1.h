@@ -56,6 +56,7 @@ typedef enum {
     SEQ_STEP5,     // NO valve & pump off; 3-way valve on for 30 sec.
     SEQ_STEP6,     // NO valve and 3-way valve on for 5 sec.
     SEQ_STEP7,     // Pump on for 20 sec.
+    SEQ_FINISHED,  // keep blocker on 
     SEQ_FAILURE_DETECTED    // when a fault is detected
 } SequenceState;
 

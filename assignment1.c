@@ -55,10 +55,10 @@ void body_button(volatile SharedVariable* sv) {
     // While the button is held down, check if it exceeds 1 second
     if (currentButtonState == LOW) {
         // Only check for long press if the sequence is running (i.e. not idle)
-        if (sv->sequenceState != SEQ_IDLE && !longPressTriggered &&
-            (millis() - buttonPressStartTime >= 1000)) {
+        if (!longPressTriggered && (millis() - buttonPressStartTime >= 1000)) {
             sv->cancelSequence = 1;          // Cancel the sequence immediately
             longPressTriggered = true;         // Mark that long press has been handled
+            sv->detectedHardWater = false; // clear hardness flag
             printf("Sequence cancellation requested (long press).\n");
         }
     }
@@ -74,15 +74,17 @@ void body_button(volatile SharedVariable* sv) {
                 sv->cancelSequence = 0;
                 sv->detectedHardWater = false;
                 printf("Sequence started.\n");
-            } else {
+	    } else if (sv->sequenceState == SEQ_FINISHED) {
+                sv->cancelSequence = 1;
+	    } else {
                 // Advance to the next step in the sequence for a short press 💯
                 // (Assuming your state machine is set up to handle an incremented state)
                 sv->sequenceState++;  
                 sv->sequenceTimestamp = millis();
                 printf("Sequence advanced to step %d.\n", sv->sequenceState);
             }
-        }
-        delay(50);  // Simple debounce after release
+	}
+	delay(50);  // Simple debounce after release
     }
 
     lastButtonState = currentButtonState;
@@ -141,6 +143,11 @@ void body_led(volatile SharedVariable* sv) {
             // Orange: Pump on to dump waste water
             softPwmWrite(PIN_SMD_RED, 255);
             softPwmWrite(PIN_SMD_GRN, 165);
+            softPwmWrite(PIN_SMD_BLU, 0);
+            break;
+	case SEQ_FINISHED:
+            softPwmWrite(PIN_SMD_RED, 0);
+            softPwmWrite(PIN_SMD_GRN, 255);
             softPwmWrite(PIN_SMD_BLU, 0);
             break;
         case SEQ_FAILURE_DETECTED:
@@ -204,7 +211,7 @@ void body_sequence(volatile SharedVariable* sv) {
             // Enable the pump.
             // This will begin circulating salt water through the softener
             TURN_ON(PIN_RELAY_PUMP);
-            if (now - sv->sequenceTimestamp >= (5 * MINUTES)) {
+            if (now - sv->sequenceTimestamp >= (12 * MINUTES)) {
                 sv->sequenceState = SEQ_STEP4;
                 sv->sequenceTimestamp = now;
                 printf("Transition to SEQ_STEP4\n");
@@ -247,9 +254,19 @@ void body_sequence(volatile SharedVariable* sv) {
             TURN_OFF(PIN_RELAY_3_WAY_VALVE);
             TURN_ON(PIN_RELAY_PUMP);
             if (now - sv->sequenceTimestamp >= (5 * MINUTES) || sv->waterLevelBelowThreshold) {
-                reset_sequence(sv);
+                sv->sequenceState = SEQ_FINISHED;
+		sv->sequenceTimestamp = now;
             }
             break;
+	case SEQ_FINISHED:
+            TURN_OFF(PIN_RELAY_3_WAY_VALVE);
+            TURN_ON(PIN_RELAY_N_O_VALVE);
+            TURN_OFF(PIN_RELAY_PUMP);
+	    // quit after 15 minutes
+            if (now - sv->sequenceTimestamp >= (15 * MINUTES)) {
+                sv->cancelSequence = 1;
+	    }
+	    break;
         case SEQ_FAILURE_DETECTED:
             TURN_OFF(PIN_RELAY_3_WAY_VALVE);
             TURN_OFF(PIN_RELAY_N_O_VALVE);
@@ -409,7 +426,8 @@ void body_ultrasonic(volatile SharedVariable* sv) {
 void body_persistent_temperature(volatile SharedVariable* sv) {
     while (true) {
         glob_t glob_result;
-        float temperature = -1000.0;  // Default error value
+        float temperature = 25.0;  // Default error value
+        sv->temperature = temperature;
         int valid = 0;                // Flag to indicate if we got a valid reading
         long timeout = 50000;         // Timeout of 50ms (50,000 microseconds)
         long overall_start = get_microseconds();
