@@ -141,7 +141,7 @@ void body_button(volatile SharedVariable &sv)
 /* ------------------------------------------------------------------ */
 static void setLed(uint8_t r, uint8_t g, uint8_t b)
 {
-    analogWrite(PIN_SMD_RED, r);
+    digitalWrite(PIN_SMD_RED, r > 0 ? HIGH : LOW);  // Digital output for pin 8
     analogWrite(PIN_SMD_GRN, g);
     analogWrite(PIN_SMD_BLU, b);
 }
@@ -151,15 +151,15 @@ void body_led(volatile SharedVariable &sv)
     switch (sv.sequenceState) {
         case SEQ_IDLE:
             if (sv.detectedHardWater)
-                setLed(192, 192, 192);  // dim white
+                setLed(255, 192, 192);  // white with red component
             else
                 setLed(0, 0, 0);
             break;
-        case SEQ_STEP1:      setLed( 64, 255,  64); break;  // green
+        case SEQ_STEP1:      setLed(  0, 255,  64); break;  // green
         case SEQ_STEP2:
-        case SEQ_STEP3:      setLed( 64,  64, 255); break;  // blue
+        case SEQ_STEP3:      setLed(  0,  64, 255); break;  // blue
         case SEQ_STEP4:      setLed(255, 255,   0); break;  // yellow
-        case SEQ_STEP5:      setLed( 64, 255,  64); break;  // green
+        case SEQ_STEP5:      setLed(  0, 255,  64); break;  // green
         case SEQ_STEP6:
         case SEQ_STEP7:      setLed(255, 165,   0); break;  // orange
         case SEQ_FINISHED:   setLed(  0, 255,   0); break;  // bright green
