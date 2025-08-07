@@ -1,24 +1,23 @@
 /**
- * database.cpp – SD-card logging back-end for Arduino Nano 33 IoT
- *    - Stores temperature and TDS readings in two CSV files
+ * database.cpp – In-memory logging back-end for Arduino Nano 33 BLE
+ *    - Stores temperature and TDS readings in circular buffers
  *    - Can retrieve the last 24 h of data as a JSON array
- *
- *  Hardware notes
- *  --------------
- *  • SD module wired to SPI        MOSI=11  MISO=12  SCK=13  CS=4 (default)
- *  • A time source is required.  If you do NOT have an RTC, call
- *      syncUnixTime(<now>) from your Wi-Fi-based NTP routine once at boot.
+ *    - Uses SRAM storage (data lost on reset, but dependency-free)
  */
 
 #include "database.h"
 #include <Arduino.h>
-#include <SPI.h>
-#include <SD.h>
 #include <ArduinoJson.h>
 
-
-// SRAM–friendly JSON buffer (≈ 2 kB)
-static const size_t   JSON_DOC_CAPACITY  = 2048;
+// -----------------------------------------------------------------------------
+// CIRCULAR BUFFER STORAGE
+// -----------------------------------------------------------------------------
+static Reading tempBuffer[BUFFER_SIZE];
+static Reading tdsBuffer[BUFFER_SIZE];
+static size_t tempWriteIndex = 0;
+static size_t tdsWriteIndex = 0;
+static size_t tempCount = 0;
+static size_t tdsCount = 0;
 
 // -----------------------------------------------------------------------------
 // SIMPLE TIME SERVICE (RTC-less fallback)
@@ -38,69 +37,48 @@ void syncUnixTime(time_t currentUtc)
 // -----------------------------------------------------------------------------
 // INTERNAL HELPERS
 // -----------------------------------------------------------------------------
-static bool ensureFileExists(const char* path, const char* headerLine)
+static void addReading(Reading* buffer, size_t& writeIndex, size_t& count, float value)
 {
-    if (SD.exists(path)) {
-        return true;
+    buffer[writeIndex].timestamp = nowUnix();
+    buffer[writeIndex].value = value;
+    
+    writeIndex = (writeIndex + 1) % BUFFER_SIZE;
+    if (count < BUFFER_SIZE) {
+        count++;
     }
-    File f = SD.open(path, FILE_WRITE);
-    if (!f) return false;
-    f.print(headerLine);   // e.g. "timestamp,value\n"
-    f.close();
-    return true;
 }
 
-static bool appendReading(const char* path, float value)
+static bool buildLast24hJson(const Reading* buffer, size_t writeIndex, size_t count,
+                             const char* valueKey, char* jsonBuffer, size_t maxSize)
 {
-    File f = SD.open(path, FILE_WRITE);
-    if (!f) {
-        Serial.println(F("[DB] ERROR: cannot open file for append"));
-        return false;
-    }
-    f.print(nowUnix());
-    f.print(',');
-    f.println(value, 2);   // two decimal places
-    f.close();
-    return true;
-}
-
-static bool buildLast24hJson(const char* path,
-                             const char* valueKey,
-                             char* jsonBuffer,
-                             size_t maxSize)
-{
-    File f = SD.open(path, FILE_READ);
-    if (!f) {
-        Serial.println(F("[DB] ERROR: cannot open file for read"));
-        return false;
-    }
-
-    StaticJsonDocument<JSON_DOC_CAPACITY> doc;
+    JsonDocument doc;
     JsonArray arr = doc.to<JsonArray>();
-
+    
     const time_t cutoff = nowUnix() - 24UL * 60UL * 60UL;
-
-    // Re-use one heap string to save RAM
-    String line;
-    while (f.available()) {
-        line = f.readStringUntil('\n');
-        // line format:   <timestamp>,<value>
-        char* cstr = line.begin();
-        char* comma = strchr(cstr, ',');
-        if (!comma) continue;
-
-        *comma = '\0';
-        unsigned long ts = strtoul(cstr, nullptr, 10);
-        if (ts < cutoff) continue;               // skip old rows
-
-        float val = atof(comma + 1);
-        JsonObject obj = arr.createNestedObject();
-        obj["time"] = ts;
-        obj[valueKey] = val;
+    
+    // Read from newest to oldest
+    for (size_t i = 0; i < count; i++) {
+        // Calculate actual index (newest first)
+        size_t actualIndex;
+        if (count < BUFFER_SIZE) {
+            // Buffer not full yet, start from beginning
+            actualIndex = (count - 1 - i);
+        } else {
+            // Buffer is full, start from writeIndex-1 (newest)
+            actualIndex = (writeIndex - 1 - i + BUFFER_SIZE) % BUFFER_SIZE;
+        }
+        
+        const Reading& reading = buffer[actualIndex];
+        
+        // Skip readings older than 24 hours
+        if (reading.timestamp < cutoff) continue;
+        
+        JsonObject obj = arr.add<JsonObject>();
+        obj["time"] = reading.timestamp;
+        obj[valueKey] = reading.value;
     }
-    f.close();
-
-    // Serialise to supplied buffer
+    
+    // Serialize to supplied buffer
     const size_t written = serializeJson(doc, jsonBuffer, maxSize);
     if (written == 0) {
         Serial.println(F("[DB] WARNING: JSON buffer too small"));
@@ -114,39 +92,49 @@ static bool buildLast24hJson(const char* path,
 // -----------------------------------------------------------------------------
 bool init_database()
 {
-    if (!SD.begin(SD_CS_PIN)) {
-        Serial.println(F("[DB] SD.begin failed"));
-        return false;
-    }
-
-    const bool ok1 = ensureFileExists(TEMP_LOG_FILENAME, "timestamp,temperature\n");
-    const bool ok2 = ensureFileExists(TDS_LOG_FILENAME,  "timestamp,tds\n");
-    return ok1 && ok2;
+    // Initialize circular buffer indices
+    tempWriteIndex = 0;
+    tdsWriteIndex = 0;
+    tempCount = 0;
+    tdsCount = 0;
+    
+    // Clear buffers
+    memset(tempBuffer, 0, sizeof(tempBuffer));
+    memset(tdsBuffer, 0, sizeof(tdsBuffer));
+    
+    Serial.println(F("[DB] In-memory database initialized"));
+    Serial.print(F("[DB] Buffer size: "));
+    Serial.print(BUFFER_SIZE);
+    Serial.println(F(" readings per sensor"));
+    
+    return true;
 }
 
 void close_database()
 {
-    // Nothing to do for SD – kept for interface parity.
+    // Nothing to do for in-memory storage
 }
 
 bool add_temperature_reading(float temperature)
 {
-    return appendReading(TEMP_LOG_FILENAME, temperature);
+    addReading(tempBuffer, tempWriteIndex, tempCount, temperature);
+    return true;
 }
 
 bool add_tds_reading(float tdsValue)
 {
-    return appendReading(TDS_LOG_FILENAME, tdsValue);
+    addReading(tdsBuffer, tdsWriteIndex, tdsCount, tdsValue);
+    return true;
 }
 
 bool get_last_24h_data(char* jsonBuffer, size_t maxSize)
 {
-    return buildLast24hJson(TEMP_LOG_FILENAME, "temperature",
-                            jsonBuffer, maxSize);
+    return buildLast24hJson(tempBuffer, tempWriteIndex, tempCount, 
+                            "temperature", jsonBuffer, maxSize);
 }
 
 bool get_last_24h_tds_data(char* jsonBuffer, size_t maxSize)
 {
-    return buildLast24hJson(TDS_LOG_FILENAME, "tds",
-                            jsonBuffer, maxSize);
+    return buildLast24hJson(tdsBuffer, tdsWriteIndex, tdsCount, 
+                            "tds", jsonBuffer, maxSize);
 }

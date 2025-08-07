@@ -3,7 +3,6 @@
 #include "database.h"
 
 #include <WiFiNINA.h>
-#include <SD.h>            // for index.html if you store it on SD
 #include <avr/dtostrf.h>   // tiny helper for float→string
 
 // ---------- Wi-Fi ----------
@@ -21,10 +20,23 @@ static char lineBuf[RX_LINE_BUF];
 void startWebServer(const char* ssid, const char* pass)
 {
 	// 1. connect to Wi-Fi
+	Serial.print(F("[WIFI] Begin connecting to "));
+	Serial.print(ssid);
+	Serial.print(F("... "));
+	Serial.println();
 	WiFi.begin(ssid, pass);
 	while (WiFi.status() != WL_CONNECTED) {
-	delay(500);
+		Serial.print(F("[WIFI] Connecting to "));
+		Serial.print(ssid);
+		Serial.print(F("... "));
+		Serial.print(WiFi.status());
+		Serial.println();
+		delay(500);
 	}
+	Serial.print(F("[WIFI] Connected to "));
+	Serial.print(ssid);
+	Serial.print(F(" with IP: "));
+	Serial.println(WiFi.localIP());
 
 	// 2. launch server
 	server.begin();
@@ -51,21 +63,17 @@ static void send_json(WiFiClient& c, const char* json)
 	c.println(json);
 }
 
-static void stream_file(WiFiClient& c, const char* path)
+static void send_simple_html(WiFiClient& c)
 {
-	File f = SD.open(path, FILE_READ);
-	if (!f) { send_404(c); return; }
-
 	c.println(F("HTTP/1.1 200 OK"));
 	c.println(F("Content-Type: text/html"));
 	c.println(F("Connection: close\r\n"));
-
-	static char buf[64];
-	int n;
-	while ((n = f.read(buf, sizeof(buf))) > 0) {
-	c.write(buf, n);        // chunk out to client
-	}
-	f.close();
+	
+	c.println(F("<!DOCTYPE html><html><head><title>Water Softener</title></head><body>"));
+	c.println(F("<h1>Water Softener Controller</h1>"));
+	c.println(F("<p><a href='/api/temp'>Temperature Data</a></p>"));
+	c.println(F("<p><a href='/api/tds'>TDS Data</a></p>"));
+	c.println(F("</body></html>"));
 }
 
 /* ------------------------------------------------------------------ */
@@ -99,7 +107,7 @@ void handleWebClient(void)
 	/* -------------------------------------------------- */
 
 	if (strcmp(path, "/") == 0) {
-	stream_file(client, "/index.html");          // SD-card copy of your page
+	send_simple_html(client);                    // Simple HTML homepage
 	}
 
 	else if (strcmp(path, "/data") == 0) {

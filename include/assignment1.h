@@ -15,19 +15,25 @@
 #define TURN_OFF(pin)  digitalWrite((pin), LOW)
 
 // === Pin definitions ===
-// todo change according to pcb
-static const uint8_t PIN_BUTTON             = 2;
+// Inputs
+static const uint8_t PIN_BUTTON             = 12;
 
-static const uint8_t PIN_ULTRASONIC_TRIG    = 3;
-static const uint8_t PIN_ULTRASONIC_ECHO    = 4;
+static const uint8_t PIN_ULTRASONIC_TRIG    = 6;
+static const uint8_t PIN_ULTRASONIC_ECHO    = 7;
 
-static const uint8_t PIN_SMD_RED            = 9;   // PWM
-static const uint8_t PIN_SMD_GRN            = 10;  // PWM
-static const uint8_t PIN_SMD_BLU            = 11;  // PWM
+static const uint8_t PIN_TEMP_ONEWIRE       = 5;   // OneWire bus for temperature sensor
 
-static const uint8_t PIN_RELAY_3            = 5;
-static const uint8_t PIN_RELAY_2            = 6;
-static const uint8_t PIN_RELAY_1            = 7;
+static const uint8_t PIN_TDS_ANALOG         = A0;  // TDS sensor analog input
+
+// Outputs
+static const uint8_t PIN_SMD_RED            = 8;   // NOT PWM :(
+static const uint8_t PIN_SMD_GRN            = 9;   // PWM
+static const uint8_t PIN_SMD_BLU            = 10;  // PWM
+static const uint8_t PIN_SMD_WHT            = 11;  // PWM
+
+static const uint8_t PIN_RELAY_3            = 4;
+static const uint8_t PIN_RELAY_2            = 3;
+static const uint8_t PIN_RELAY_1            = 2;
 static const uint8_t PIN_RELAY_N_O_VALVE    = PIN_RELAY_3;
 static const uint8_t PIN_RELAY_3_WAY_VALVE  = PIN_RELAY_1;
 static const uint8_t PIN_RELAY_PUMP         = PIN_RELAY_2;

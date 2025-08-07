@@ -2,17 +2,16 @@
 #define DATABASE_H
 
 #include <Arduino.h>
-#include <SPI.h>
-#include <SD.h>
 #include <ArduinoJson.h>
-#include <RTClib.h>    // for timestamping; see https://github.com/adafruit/RTClib
 
-// todo: Change this to your SD chip-select pin:
-static const uint8_t SD_CS_PIN = 4;
+// Reading structure for circular buffer storage
+struct Reading {
+    uint32_t timestamp;
+    float value;
+};
 
-// Filenames on the SD card:
-static const char* TEMP_LOG_FILENAME = "temp.csv";
-static const char* TDS_LOG_FILENAME  = "tds.csv";
+// Buffer size: 288 readings = 24 hours at 5-minute intervals
+static const size_t BUFFER_SIZE = 288;
 
 // Initializes the SD card and RTC. Returns true on success.
 bool init_database();

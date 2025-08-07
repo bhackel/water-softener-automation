@@ -69,7 +69,7 @@ static void ledInit()
 
 void init_sensors(volatile SharedVariable &sv)
 {
-    (void)sv;            // unused for now
+    static_cast<void>(sv);  // unused for now
     ledInit();
 
     pinMode(PIN_BUTTON,               INPUT_PULLUP);
@@ -280,20 +280,16 @@ void body_sequence(volatile SharedVariable &sv)
 /* ------------------------------------------------------------------ */
 void body_tds(volatile SharedVariable &sv)
 {
-    /*  ADS1115 single-shot, AIN0-GND, ±2.048 V, 128 SPS                 */
-    constexpr uint16_t cfg = 0b1100010110000011;   // OS=1, MUX=100, PGA=010, MODE=1, DR=100, COMP_QUE=11
+    // Read directly from Arduino analog pin A0 (0-3.3V, 12-bit resolution)
+    uint16_t raw = analogRead(PIN_TDS_ANALOG);
+    
+    // Convert to voltage (Nano 33 BLE: 12-bit ADC, 3.3V reference)
+    const float voltage = (float)raw * 3.3f / 4095.0f;
+    
+    // Convert voltage to TDS - this needs calibration with your 330PPM solution
+    float tds = voltage * 1000.0f;  // Starting conversion factor - needs calibration
 
-    adsWrite16(ADS_REG_CFG, cfg);
-    delay(10);                                      // wait for conversion
-    uint16_t raw = adsRead16(ADS_REG_CONV);
-
-    /*  swap bytes (ADS is big-endian)                                   */
-    raw = (raw >> 8) | (raw << 8);
-    if (raw & 0x8000) raw = 0;                      // exclude negatives
-
-    const float voltage = (float)raw * 2.048f / 32767.0f;
-    float tds           = voltage * 1221.0f;
-
+    // Apply temperature compensation (when temperature data is valid)
     if (sv.temperature >= 0.0f && sv.temperature <= 50.0f) {
         const float coeff = 1.0f + 0.02f * (sv.temperature - 25.0f);
         tds /= coeff;
@@ -333,10 +329,6 @@ void body_ultrasonic(volatile SharedVariable &sv)
 void body_persistent_temperature(volatile SharedVariable &sv)
 {
     /*  TODO: Replace with OneWire + DallasTemperature                   */
-    static unsigned long last = 0;
-    if (millis() - last < 2000) return;             // every 2 s
-    last = millis();
-
     sv.temperature = 25.0f;                         // stub
 }
 
