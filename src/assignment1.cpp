@@ -139,11 +139,12 @@ void body_button(volatile SharedVariable &sv)
 /* ------------------------------------------------------------------ */
 /*  ───── LED                                                         */
 /* ------------------------------------------------------------------ */
-static void setLed(uint8_t r, uint8_t g, uint8_t b)
+static void setLed(uint8_t r, uint8_t g, uint8_t b, uint8_t w = 0)
 {
-    digitalWrite(PIN_SMD_RED, r > 0 ? HIGH : LOW);  // Digital output for pin 8
+    analogWrite(PIN_SMD_RED, r);
     analogWrite(PIN_SMD_GRN, g);
     analogWrite(PIN_SMD_BLU, b);
+    analogWrite(PIN_SMD_WHT, w);
 }
 
 void body_led(volatile SharedVariable &sv)
@@ -151,20 +152,20 @@ void body_led(volatile SharedVariable &sv)
     switch (sv.sequenceState) {
         case SEQ_IDLE:
             if (sv.detectedHardWater)
-                setLed(255, 192, 192);  // white with red component
+                setLed(180, 140, 140, 80);  // light pinkish-white
             else
-                setLed(0, 0, 0);
+                setLed(0, 0, 0, 40);        // small white for idle
             break;
-        case SEQ_STEP1:      setLed(  0, 255,  64); break;  // green
+        case SEQ_STEP1:      setLed(  0, 180,  50, 50); break;  // light green
         case SEQ_STEP2:
-        case SEQ_STEP3:      setLed(  0,  64, 255); break;  // blue
-        case SEQ_STEP4:      setLed(255, 255,   0); break;  // yellow
-        case SEQ_STEP5:      setLed(  0, 255,  64); break;  // green
+        case SEQ_STEP3:      setLed(  0,  50, 180, 50); break;  // light blue
+        case SEQ_STEP4:      setLed(180, 180,   0, 60); break;  // light yellow
+        case SEQ_STEP5:      setLed(  0, 180,  50, 50); break;  // light green
         case SEQ_STEP6:
-        case SEQ_STEP7:      setLed(255, 165,   0); break;  // orange
-        case SEQ_FINISHED:   setLed(  0, 255,   0); break;  // bright green
+        case SEQ_STEP7:      setLed(180, 120,   0, 40); break;  // light orange
+        case SEQ_FINISHED:   setLed(  0, 200,   0, 80); break;  // bright light green
         case SEQ_FAILURE_DETECTED:
-                             setLed(255,   0,   0); break;  // red
+                             setLed(200,   0,   0, 30); break;  // light red
         default: break;
     }
 }
@@ -302,25 +303,73 @@ void body_tds(volatile SharedVariable &sv)
 /* ------------------------------------------------------------------ */
 /*  ───── ULTRASONIC BUCKET LEVEL                                    */
 /* ------------------------------------------------------------------ */
-void body_ultrasonic(volatile SharedVariable &sv)
-{
-    /*  Send 10 µs pulse  */
-    digitalWrite(PIN_ULTRASONIC_TRIG, LOW);
-    delayMicroseconds(2);
-    digitalWrite(PIN_ULTRASONIC_TRIG, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(PIN_ULTRASONIC_TRIG, LOW);
+enum UltrasonicState { ULTRASONIC_IDLE=0, ULTRASONIC_WAIT_HIGH=1, ULTRASONIC_WAIT_LOW=2 };
+static UltrasonicState ultrasonic_state = ULTRASONIC_IDLE;
+static unsigned long ultrasonic_next_ms = 0;
+static unsigned long ultrasonic_t_start = 0;
+static unsigned long ultrasonic_rise = 0;
 
-    const unsigned long dur = pulseIn(PIN_ULTRASONIC_ECHO, HIGH, 30000UL); // 30 ms max
-    if (dur == 0) return;                           // timeout → ignore
+void body_ultrasonic(volatile SharedVariable &sv) {
+  const unsigned long now_ms = millis();
+  const unsigned long now_us = micros();
 
-    const double distance = dur * 0.0343 / 2.0;     // cm
+  switch (ultrasonic_state) {
+    case ULTRASONIC_IDLE: {
+      if (now_ms < ultrasonic_next_ms) return;
 
-    sv.waterLevelAboveThreshold = (distance < WATER_LEVEL_HIGH_THRESHOLD_CM);
-    sv.waterLevelBelowThreshold = (distance > WATER_LEVEL_LOW_THRESHOLD_CM);
+      // 10 µs trigger (no busy loops beyond 12 µs)
+      digitalWrite(PIN_ULTRASONIC_TRIG, LOW);  delayMicroseconds(2);
+      digitalWrite(PIN_ULTRASONIC_TRIG, HIGH); delayMicroseconds(10);
+      digitalWrite(PIN_ULTRASONIC_TRIG, LOW);
 
-    if (distance > MAX_DISTANCE_CM * 0.9)
-        sv.sequenceState = SEQ_FAILURE_DETECTED;
+      ultrasonic_t_start = micros();
+      ultrasonic_state   = ULTRASONIC_WAIT_HIGH;
+      ultrasonic_next_ms = now_ms + US_RATE_MS;  // schedule next measurement cycle
+      return;
+    }
+
+    case ULTRASONIC_WAIT_HIGH: {
+      if (digitalRead(PIN_ULTRASONIC_ECHO)) {
+        ultrasonic_rise  = micros();
+        ultrasonic_state = ULTRASONIC_WAIT_LOW;
+        return;
+      }
+      if ((unsigned long)(micros() - ultrasonic_t_start) >= MAX_ECHO_ULTRASONIC) {
+        // No echo started within expected window → skip this cycle (don’t fail immediately)
+        ultrasonic_state = ULTRASONIC_IDLE;
+      }
+      return;
+    }
+
+    case ULTRASONIC_WAIT_LOW: {
+      if (!digitalRead(PIN_ULTRASONIC_ECHO)) {
+        const unsigned long fall = micros();
+        const unsigned long width = (fall >= ultrasonic_rise) ? (fall - ultrasonic_rise) : 0UL;
+
+        // Convert µs → cm with integer math (rounded): cm ≈ width/58
+        const unsigned long cm = (width + 29UL) / 58UL;
+
+        // Update your flags (no floats needed)
+        sv.waterLevelAboveThreshold = (cm <  WATER_LEVEL_HIGH_THRESHOLD_CM);
+        sv.waterLevelBelowThreshold = (cm >  WATER_LEVEL_LOW_THRESHOLD_CM);
+
+        // Optional: treat near-limit as a soft warning instead of instant failure
+        // if (cm > (MAX_DISTANCE_CM * 9UL) / 10UL) { /* warn */ }
+
+        ultrasonic_state = ULTRASONIC_IDLE;
+        return;
+      }
+
+      // Echo stayed high too long; clamp to max and finish the cycle
+      if ((unsigned long)(micros() - ultrasonic_rise) >= MAX_ECHO_ULTRASONIC) {
+        const unsigned long cm = (MAX_ECHO_ULTRASONIC + 29UL) / 58UL;
+        sv.waterLevelAboveThreshold = (cm <  WATER_LEVEL_HIGH_THRESHOLD_CM);
+        sv.waterLevelBelowThreshold = (cm >  WATER_LEVEL_LOW_THRESHOLD_CM);
+        ultrasonic_state = ULTRASONIC_IDLE;
+      }
+      return;
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ */

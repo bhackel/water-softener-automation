@@ -26,10 +26,10 @@ static const uint8_t PIN_TEMP_ONEWIRE       = 5;   // OneWire bus for temperatur
 static const uint8_t PIN_TDS_ANALOG         = A0;  // TDS sensor analog input
 
 // Outputs
-static const uint8_t PIN_SMD_RED            = 8;   // NOT PWM :(
-static const uint8_t PIN_SMD_GRN            = 9;   // PWM
-static const uint8_t PIN_SMD_BLU            = 10;  // PWM
-static const uint8_t PIN_SMD_WHT            = 11;  // PWM
+static const uint8_t PIN_SMD_RED            = 9;   // PWM Supported
+static const uint8_t PIN_SMD_GRN            = 8;   // PWM Supported
+static const uint8_t PIN_SMD_BLU            = 10;  // PWM Supported
+static const uint8_t PIN_SMD_WHT            = 11;  // PWM Supported
 
 static const uint8_t PIN_RELAY_3            = 4;
 static const uint8_t PIN_RELAY_2            = 3;
@@ -41,7 +41,9 @@ static const uint8_t PIN_RELAY_PUMP         = PIN_RELAY_2;
 // Water-level and TDS thresholds
 #define WATER_LEVEL_HIGH_THRESHOLD_CM   10  
 #define WATER_LEVEL_LOW_THRESHOLD_CM    25  
-#define MAX_DISTANCE_CM                 50
+#define WATER_LEVEL_MAX_DISTANCE_CM     50UL
+#define US_RATE_MS                      250UL
+#define MAX_ECHO_ULTRASONIC             ((WATER_LEVEL_MAX_DISTANCE_CM * 58UL * 12UL) / 10UL)  // ceil(cm*58*1.2) (20% margin)
 #define HARD_WATER_TDS_THRESHOLD        1500  
 
 // Sequence states
