@@ -8,6 +8,8 @@
 #include "database.h"
 #include <Arduino.h>
 #include <Wire.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
 /* ------------------------------------------------------------------ */
 /*  ───── helpers: ADS1115 (bare-metal, uses 0x48)                     */
@@ -37,6 +39,16 @@ namespace {
         uint16_t lo = Wire.read();
         return (hi << 8) | lo;
     }
+}
+
+/* ------------------------------------------------------------------ */
+/*  ───── OneWire Temperature Sensor Setup                            */
+/* ------------------------------------------------------------------ */
+namespace {
+    OneWire oneWire(PIN_TEMP_ONEWIRE);
+    DallasTemperature temperatureSensor(&oneWire);
+    DeviceAddress tempSensorAddress;
+    bool tempSensorFound = false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -86,6 +98,23 @@ void init_sensors(volatile SharedVariable &sv)
     TURN_OFF(PIN_RELAY_PUMP);
 
     Wire.begin();       // start I²C for ADS1115
+    
+    // Initialize OneWire temperature sensor
+    temperatureSensor.begin();
+    temperatureSensor.setWaitForConversion(false); // Non-blocking mode
+    
+    // Search for temperature sensor
+    if (temperatureSensor.getDeviceCount() > 0) {
+        if (temperatureSensor.getAddress(tempSensorAddress, 0)) {
+            temperatureSensor.setResolution(tempSensorAddress, 12); // 12-bit precision
+            tempSensorFound = true;
+            Serial.println(F("[TEMP] DS18B20 sensor found and configured"));
+        } else {
+            Serial.println(F("[TEMP] DS18B20 sensor found but address read failed"));
+        }
+    } else {
+        Serial.println(F("[TEMP] No DS18B20 sensors found on OneWire bus"));
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -373,12 +402,62 @@ void body_ultrasonic(volatile SharedVariable &sv) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  ───── TEMPERATURE (placeholder)                                   */
+/*  ───── TEMPERATURE (non-blocking OneWire DS18B20)                  */
 /* ------------------------------------------------------------------ */
+enum TemperatureState { TEMP_IDLE = 0, TEMP_REQUEST = 1, TEMP_WAIT = 2, TEMP_READ = 3 };
+static TemperatureState temp_state = TEMP_IDLE;
+static unsigned long temp_next_ms = 0;
+static unsigned long temp_conversion_start = 0;
+
 void body_persistent_temperature(volatile SharedVariable &sv)
 {
-    /*  TODO: Replace with OneWire + DallasTemperature                   */
-    sv.temperature = 25.0f;                         // stub
+    const unsigned long now = millis();
+    
+    // If no sensor found, use fallback temperature
+    if (!tempSensorFound) {
+        sv.temperature = 25.0f; // Default room temperature
+        return;
+    }
+    
+    switch (temp_state) {
+        case TEMP_IDLE:
+            // Wait for next reading cycle (every 2 seconds)
+            if (now >= temp_next_ms) {
+                temp_state = TEMP_REQUEST;
+                temp_next_ms = now + 2000; // Schedule next reading in 2 seconds
+            }
+            break;
+            
+        case TEMP_REQUEST:
+            // Start temperature conversion
+            temperatureSensor.requestTemperaturesByAddress(tempSensorAddress);
+            temp_conversion_start = now;
+            temp_state = TEMP_WAIT;
+            break;
+            
+        case TEMP_WAIT:
+            // Wait for conversion to complete (750ms for 12-bit resolution)
+            if (now - temp_conversion_start >= 750) {
+                temp_state = TEMP_READ;
+            }
+            break;
+            
+        case TEMP_READ:
+            // Read the temperature value
+            if (temperatureSensor.isConversionComplete()) {
+                float tempC = temperatureSensor.getTempC(tempSensorAddress);
+                
+                // Validate temperature reading
+                if (tempC != DEVICE_DISCONNECTED_C && tempC >= -55.0f && tempC <= 125.0f) {
+                    sv.temperature = tempC;
+                } else {
+                    // Keep previous temperature on invalid reading
+                    Serial.println(F("[TEMP] Invalid reading, keeping previous value"));
+                }
+            }
+            temp_state = TEMP_IDLE;
+            break;
+    }
 }
 
 /* ------------------------------------------------------------------ */

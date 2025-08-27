@@ -16,6 +16,10 @@ BLECharacteristic temperatureCharacteristic(
   BLERead | BLENotify, 4
 );
 
+// Descriptors for characteristic names
+BLEDescriptor tdsDescriptor("2901", "TDS (ppm)");
+BLEDescriptor temperatureDescriptor("2901", "Temperature (°C)");
+
 // Connection status
 static volatile bool centralConnected = false;
 
@@ -40,6 +44,11 @@ bool initBluetoothService(const char* deviceName)
 
   // Service + characteristics
   BLE.setAdvertisedService(waterSoftenerService);
+  
+  // Add descriptors to characteristics
+  tdsCharacteristic.addDescriptor(tdsDescriptor);
+  temperatureCharacteristic.addDescriptor(temperatureDescriptor);
+  
   waterSoftenerService.addCharacteristic(tdsCharacteristic);
   waterSoftenerService.addCharacteristic(temperatureCharacteristic);
   BLE.addService(waterSoftenerService);
