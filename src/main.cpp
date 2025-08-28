@@ -7,8 +7,8 @@
  ***********************************************************************/
 
 #include <Arduino.h>
-#include "assignment1.h"
-#include "database.h"
+#include "sensor_manager.h"
+#include "data_logger.h"
 #include "bluetooth_service.h"
 
 /* ---------- Bluetooth device name ---------- */
