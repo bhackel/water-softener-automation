@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# Build an unsigned .ipa from the Xcode project/workspace in this folder.
+# Works with Xcode 16.1. Suitable for sideloading via AltStore (no signing).
+#
+# Usage:
+#   chmod +x build-ipa
+#   ./build-ipa
+#
+# Optional env vars to override auto-detection:
+#   SCHEME="MyApp"            # Scheme to build (must be Shared)
+#   CONFIGURATION="Release"   # Build configuration (default: Release)
+#   WORKSPACE="App.xcworkspace"
+#   PROJECT="App.xcodeproj"
+#   OUTPUT_DIR="dist"         # Where to put the .ipa
+#
+# Notes:
+# - The script first does a normal device build (-sdk iphoneos, no signing).
+#   If no .app is found there, it tries an unsigned Archive and packages from it.
+# - If you have multiple schemes, you can set SCHEME=... to pick the right one.
+# - If no shared scheme is found, open Xcode → Product → Scheme → Manage Schemes…
+#   and check “Shared” for your app scheme, then re-run.
+
+set -euo pipefail
+
+die()  { echo "❌ $*" >&2; exit 1; }
+info() { echo "👉 $*"; }
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+CONFIGURATION="${CONFIGURATION:-Release}"
+OUTPUT_DIR="${OUTPUT_DIR:-dist}"
+BUILD_DIR="$ROOT_DIR/.build"
+DERIVED_DATA="$BUILD_DIR/DerivedData"
+
+mkdir -p "$OUTPUT_DIR" "$BUILD_DIR"
+
+OUTPUT_DIR_ABS="$(cd "$OUTPUT_DIR" && pwd)"
+
+# --- Detect workspace/project -------------------------------------------------
+if [[ -z "${WORKSPACE:-}" && -z "${PROJECT:-}" ]]; then
+  shopt -s nullglob
+  workspaces=( *.xcworkspace )
+  projects=( *.xcodeproj )
+  shopt -u nullglob
+
+  if (( ${#workspaces[@]} > 0 )); then
+    WORKSPACE="${workspaces[0]}"
+  elif (( ${#projects[@]} > 0 )); then
+    PROJECT="${projects[0]}"
+  else
+    die "No .xcworkspace or .xcodeproj found in $(pwd)"
+  fi
+fi
+
+declare -a CONTAINER_ARGS=()
+if [[ -n "${WORKSPACE:-}" ]]; then
+  CONTAINER_ARGS=( -workspace "$WORKSPACE" )
+  info "Using workspace: $WORKSPACE"
+else
+  CONTAINER_ARGS=( -project "$PROJECT" )
+  info "Using project: $PROJECT"
+fi
+
+# --- Detect scheme if not provided -------------------------------------------
+pick_first_scheme() {
+  # Parse 'xcodebuild -list' output to pull the first scheme line.
+  local schemes
+  if ! schemes="$(xcodebuild "${CONTAINER_ARGS[@]}" -list 2>/dev/null \
+      | awk '/Schemes:/{flag=1; next} /^\s*$/{if(flag){exit}; next} flag{gsub(/^[ \t]+/,""); print}')"; then
+    echo ""
+    return
+  fi
+  echo "$schemes" | head -n 1
+}
+
+if [[ -z "${SCHEME:-}" ]]; then
+  SCHEME="$(pick_first_scheme || true)"
+  [[ -n "$SCHEME" ]] || die "Could not auto-detect a shared scheme. Share your app scheme and try again (see notes at top of script)."
+  info "Auto-detected scheme: $SCHEME"
+else
+  info "Using scheme: $SCHEME"
+fi
+
+# --- Common xcodebuild args ---------------------------------------------------
+declare -a XCBUILDER=(
+  xcodebuild
+  "${CONTAINER_ARGS[@]}"
+  -scheme "$SCHEME"
+  -configuration "$CONFIGURATION"
+  -derivedDataPath "$DERIVED_DATA"
+  ONLY_ACTIVE_ARCH=NO
+  CODE_SIGNING_ALLOWED=NO
+  CODE_SIGNING_REQUIRED=NO
+)
+
+# --- Step 1: Try a plain device build (fast path) -----------------------------
+info "Building (iphoneos, unsigned)…"
+if ! "${XCBUILDER[@]}" -sdk iphoneos build | tee "$BUILD_DIR/build.log" > /dev/null; then
+  info "Build reported non-zero exit; will try archive fallback after packaging check."
+fi
+
+APP_PATH=""
+if [[ -d "$DERIVED_DATA/Build/Products/${CONFIGURATION}-iphoneos" ]]; then
+  APP_PATH="$(/usr/bin/find "$DERIVED_DATA/Build/Products/${CONFIGURATION}-iphoneos" -maxdepth 1 -type d -name '*.app' -print -quit || true)"
+fi
+
+# --- Step 2: If needed, try to archive (still unsigned) ----------------------
+if [[ -z "$APP_PATH" ]]; then
+  info "No .app found in DerivedData. Trying unsigned Archive…"
+  ARCHIVE_PATH="$BUILD_DIR/$SCHEME.xcarchive"
+  # Clean + archive to a generic iOS device destination.
+  if "${XCBUILDER[@]}" -destination "generic/platform=iOS" -archivePath "$ARCHIVE_PATH" clean archive | tee "$BUILD_DIR/archive.log" > /dev/null; then
+    if [[ -d "$ARCHIVE_PATH/Products/Applications" ]]; then
+      APP_PATH="$(/usr/bin/find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -type d -name '*.app' -print -quit || true)"
+    fi
+  fi
+fi
+
+[[ -n "$APP_PATH" ]] || die "Could not locate built .app. Ensure the scheme builds an iOS app target and is Shared."
+
+info "Using app: $APP_PATH"
+
+# --- Name the IPA from Info.plist --------------------------------------------
+PLIST="$APP_PATH/Info.plist"
+
+read_plist() {
+  /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST" 2>/dev/null || true
+}
+
+DISPLAY_NAME="$(read_plist CFBundleDisplayName)"
+BUNDLE_NAME="$(read_plist CFBundleName)"
+SHORT_VERSION="$(read_plist CFBundleShortVersionString)"
+BUILD_NUMBER="$(read_plist CFBundleVersion)"
+
+APP_BASENAME="${DISPLAY_NAME:-${BUNDLE_NAME:-$SCHEME}}"
+# Sanitize filename a bit
+SAFE_BASENAME="$(echo "$APP_BASENAME" | tr -cd '[:alnum:]._ -' | sed 's/[[:space:]]\{1,\}/ /g' | sed 's/[[:space:]]*$//')"
+
+if [[ -n "$SHORT_VERSION" && -n "$BUILD_NUMBER" ]]; then
+  IPA_NAME="${SAFE_BASENAME}-${SHORT_VERSION}(${BUILD_NUMBER}).ipa"
+elif [[ -n "$SHORT_VERSION" ]]; then
+  IPA_NAME="${SAFE_BASENAME}-${SHORT_VERSION}.ipa"
+else
+  IPA_NAME="${SAFE_BASENAME}.ipa"
+fi
+
+IPA_PATH="$OUTPUT_DIR_ABS/$IPA_NAME"
+
+# --- Package Payload and zip to .ipa -----------------------------------------
+info "Packaging IPA → $IPA_PATH"
+TMPDIR="$(/usr/bin/mktemp -d "$BUILD_DIR/payload.XXXXXX")"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+mkdir -p "$TMPDIR/Payload"
+# Preserve symlinks and attributes; 'ditto' works well too, but cp -R is enough here.
+cp -R "$APP_PATH" "$TMPDIR/Payload/"
+
+(
+  cd "$TMPDIR"
+  # Quiet, recurse, preserve symlinks; keep archive deterministic enough.
+  /usr/bin/zip -qry "$IPA_PATH" "Payload"
+)
+
+# Optionally, copy dSYM(s) alongside IPA if present (nice to have; harmless if missing).
+DSYM_SRC=""
+if [[ -d "$DERIVED_DATA/Build/Products/${CONFIGURATION}-iphoneos" ]]; then
+  DSYM_SRC="$(/usr/bin/find "$DERIVED_DATA/Build/Products/${CONFIGURATION}-iphoneos" -maxdepth 1 -type d -name '*.dSYM' -print -quit || true)"
+fi
+if [[ -z "$DSYM_SRC" && -n "${ARCHIVE_PATH:-}" && -d "$ARCHIVE_PATH/dSYMs" ]]; then
+  DSYM_SRC="$(/usr/bin/find "$ARCHIVE_PATH/dSYMs" -maxdepth 1 -type d -name '*.dSYM' -print -quit || true)"
+fi
+if [[ -n "$DSYM_SRC" ]]; then
+  cp -R "$DSYM_SRC" "$OUTPUT_DIR/"
+  info "Copied dSYM to $OUTPUT_DIR/$(basename "$DSYM_SRC")"
+fi
+
+info "✅ Done. IPA ready at: $IPA_PATH"
+echo
+echo "Next: open AltStore and sideload the IPA above."
+
