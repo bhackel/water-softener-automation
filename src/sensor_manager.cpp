@@ -4,8 +4,8 @@
  *  Required libs:  Wire, ArduinoJson (for db code), ADS1X15 (optional)
  */
 
-#include "assignment1.h"
-#include "database.h"
+#include "sensor_manager.h"
+#include "data_logger.h"
 #include <Arduino.h>
 #include <Wire.h>
 #include <OneWire.h>
