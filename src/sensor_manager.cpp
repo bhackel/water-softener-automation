@@ -70,6 +70,7 @@ void init_shared_variable(volatile SharedVariable &sv)
     sv.temperature            = 0.0f;
     sv.tds_reading            = 0.0f;
     sv.detectedHardWater      = false;
+    sv.ultrasonicFailureCount = 0;
 }
 
 static void ledInit()
@@ -332,12 +333,23 @@ void body_tds(volatile SharedVariable &sv)
 /* ------------------------------------------------------------------ */
 /*  ───── ULTRASONIC BUCKET LEVEL                                    */
 /* ------------------------------------------------------------------ */
-enum UltrasonicState { ULTRASONIC_IDLE=0, ULTRASONIC_WAIT_HIGH=1, ULTRASONIC_WAIT_LOW=2 };
+enum UltrasonicState { 
+    ULTRASONIC_IDLE=0, 
+    ULTRASONIC_WAIT_HIGH=1, 
+    ULTRASONIC_WAIT_LOW=2 
+};
 static UltrasonicState ultrasonic_state = ULTRASONIC_IDLE;
 static unsigned long ultrasonic_next_ms = 0;
 static unsigned long ultrasonic_t_start = 0;
 static unsigned long ultrasonic_rise = 0;
 
+/**
+ * State machine for tracking ultrasonic state
+ * Used to avoid busy-waiting to allow Bluetooth events to be processed
+ * Begins by sending a signal to TRIG, then waiting for a response
+ * on the ECHO pin. Uses the time difference to get the distance.
+ * Some responses may be missed, which is acceptable.
+ */
 void body_ultrasonic(volatile SharedVariable &sv) {
   const unsigned long now_ms = millis();
   const unsigned long now_us = micros();
@@ -353,7 +365,7 @@ void body_ultrasonic(volatile SharedVariable &sv) {
 
       ultrasonic_t_start = micros();
       ultrasonic_state   = ULTRASONIC_WAIT_HIGH;
-      ultrasonic_next_ms = now_ms + US_RATE_MS;  // schedule next measurement cycle
+      ultrasonic_next_ms = now_ms + ULTRASONIC_READ_INTERVAL_MS;  // schedule next measurement cycle
       return;
     }
 
@@ -364,8 +376,13 @@ void body_ultrasonic(volatile SharedVariable &sv) {
         return;
       }
       if ((unsigned long)(micros() - ultrasonic_t_start) >= MAX_ECHO_ULTRASONIC) {
-        // No echo started within expected window → skip this cycle (don’t fail immediately)
-        ultrasonic_state = ULTRASONIC_IDLE;
+        // No echo started within expected window, report error
+        Serial.println(F("[ULTRASONIC] No echo started within expected window"));
+        sv.ultrasonicFailureCount++;
+        if (sv.ultrasonicFailureCount >= ULTRASONIC_FAILURE_THRESHOLD) {
+          sv.sequenceState = SEQ_FAILURE_DETECTED;
+          Serial.println(F("[ULTRASONIC] Too many failures, entering FAILURE_DETECTED state"));
+        }
       }
       return;
     }
@@ -382,19 +399,18 @@ void body_ultrasonic(volatile SharedVariable &sv) {
         sv.waterLevelAboveThreshold = (cm <  WATER_LEVEL_HIGH_THRESHOLD_CM);
         sv.waterLevelBelowThreshold = (cm >  WATER_LEVEL_LOW_THRESHOLD_CM);
 
-        // Optional: treat near-limit as a soft warning instead of instant failure
-        // if (cm > (MAX_DISTANCE_CM * 9UL) / 10UL) { /* warn */ }
-
         ultrasonic_state = ULTRASONIC_IDLE;
         return;
       }
 
-      // Echo stayed high too long; clamp to max and finish the cycle
+      // Echo stayed high too long, report error
       if ((unsigned long)(micros() - ultrasonic_rise) >= MAX_ECHO_ULTRASONIC) {
-        const unsigned long cm = (MAX_ECHO_ULTRASONIC + 29UL) / 58UL;
-        sv.waterLevelAboveThreshold = (cm <  WATER_LEVEL_HIGH_THRESHOLD_CM);
-        sv.waterLevelBelowThreshold = (cm >  WATER_LEVEL_LOW_THRESHOLD_CM);
-        ultrasonic_state = ULTRASONIC_IDLE;
+        Serial.println(F("[ULTRASONIC] Echo stayed high too long"));
+        sv.ultrasonicFailureCount++;
+        if (sv.ultrasonicFailureCount >= ULTRASONIC_FAILURE_THRESHOLD) {
+          sv.sequenceState = SEQ_FAILURE_DETECTED;
+          Serial.println(F("[ULTRASONIC] Too many failures, entering FAILURE_DETECTED state"));
+        }
       }
       return;
     }
@@ -409,7 +425,7 @@ static TemperatureState temp_state = TEMP_IDLE;
 static unsigned long temp_next_ms = 0;
 static unsigned long temp_conversion_start = 0;
 
-void body_persistent_temperature(volatile SharedVariable &sv)
+void body_temperature(volatile SharedVariable &sv)
 {
     const unsigned long now = millis();
     

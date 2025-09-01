@@ -21,6 +21,9 @@ static const char *BLE_DEVICE_NAME = "Water";
 void setup()
 {
     Serial.begin(115200);
+    
+    // 7 second boot delay
+    delay(7000);
 
     if (!initBluetoothService(BLE_DEVICE_NAME)) {
         Serial.println(F("[BOOT] Bluetooth service init failed"));
@@ -40,13 +43,13 @@ void loop()
     body_button(sv);
     body_sequence(sv);
     body_led(sv);
-    body_ultrasonic(sv);
+    // body_ultrasonic(sv);
     body_tds(sv);
-    body_persistent_temperature(sv);
+    body_temperature(sv);
     body_persistent_log_to_database(sv);
 
     /* handle Bluetooth events ------------------------------------- */
-    handleBluetoothEvents();               // from bluetooth_service.cpp
+    // handleBluetoothEvents();               // from bluetooth_service.cpp
 
     delay(5);                              // small yield for BLE stack
 }

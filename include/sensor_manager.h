@@ -42,9 +42,10 @@ static const uint8_t PIN_RELAY_PUMP         = PIN_RELAY_2;
 #define WATER_LEVEL_HIGH_THRESHOLD_CM   10  
 #define WATER_LEVEL_LOW_THRESHOLD_CM    25  
 #define WATER_LEVEL_MAX_DISTANCE_CM     50UL
-#define US_RATE_MS                      250UL
+#define ULTRASONIC_READ_INTERVAL_MS     250UL
 #define MAX_ECHO_ULTRASONIC             ((WATER_LEVEL_MAX_DISTANCE_CM * 58UL * 12UL) / 10UL)  // ceil(cm*58*1.2) (20% margin)
-#define HARD_WATER_TDS_THRESHOLD        1500  
+#define HARD_WATER_TDS_THRESHOLD        1500
+#define ULTRASONIC_FAILURE_THRESHOLD    100000   // Switch to failure state after 10 consecutive failures  
 
 // Sequence states
 enum SequenceState {
@@ -71,6 +72,7 @@ struct SharedVariable {
     volatile float  temperature;
     volatile float  tds_reading;
     volatile bool   detectedHardWater;
+    volatile uint16_t ultrasonicFailureCount;
 };
 
 extern volatile SharedVariable sv;
@@ -84,7 +86,7 @@ void body_led(volatile SharedVariable &sv);
 void body_sequence(volatile SharedVariable &sv);
 void body_tds(volatile SharedVariable &sv);
 void body_ultrasonic(volatile SharedVariable &sv);
-void body_persistent_temperature(volatile SharedVariable &sv);
+void body_temperature(volatile SharedVariable &sv);
 void body_persistent_log_to_database(volatile SharedVariable &sv);
 
 #endif // ASSIGNMENT1_H
