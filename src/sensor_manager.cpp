@@ -104,6 +104,8 @@ void init_sensors(volatile SharedVariable &sv)
     ultrasonic_init();
     
     // Initialize OneWire temperature sensor
+    // wait a lil
+    delay(1000);
     temperatureSensor.begin();
     temperatureSensor.setWaitForConversion(false); // Non-blocking mode
     
@@ -501,9 +503,9 @@ void body_ultrasonic(volatile SharedVariable &sv) {
         // Success resets failure streak
         sv.ultrasonicFailureCount = 0;
 
-        Serial.print(F("[ULTRASONIC] Distance: "));
-        Serial.print(cm);
-        Serial.println(F(" cm"));
+        // Serial.print(F("[ULTRASONIC] Distance: "));
+        // Serial.print(cm);
+        // Serial.println(F(" cm"));
 
         ultrasonic_state = ULTRASONIC_IDLE;
         return;

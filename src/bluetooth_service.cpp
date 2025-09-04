@@ -97,11 +97,11 @@ void handleBluetoothEvents()
   pollCount++;
   lastPollTime = currentTime;
   
-  // Report stats every 5 seconds
+  // Report stats every 30 seconds
   static unsigned long lastReport = 0;
-  if (currentTime - lastReport >= 5000) {
+  if (currentTime - lastReport >= 30000) {
     lastReport = currentTime;
-    if (pollCount > 0) {
+    if (pollCount > 1) {  // Need at least 2 polls to calculate interval
       unsigned long avgInterval = totalInterval / (pollCount - 1);
       Serial.print(F("[BLE_TIMING] Poll count: ")); Serial.print(pollCount);
       Serial.print(F(", Avg interval: ")); Serial.print(avgInterval); Serial.print(F("ms"));

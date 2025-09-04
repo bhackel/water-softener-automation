@@ -21,7 +21,7 @@ static const uint8_t PIN_BUTTON             = D12;
 static const uint8_t PIN_ULTRASONIC_TRIG    = D6;
 static const uint8_t PIN_ULTRASONIC_ECHO    = D7;
 
-static const uint8_t PIN_TEMP_ONEWIRE       = 8;  // Onewire, Nano ESP32 D5 converted to GPIO
+static const uint8_t PIN_TEMP_ONEWIRE       = D5;  // Onewire, Nano ESP32 D5 converted to GPIO 8
 
 static const uint8_t PIN_TDS_ANALOG         = A0;  // TDS sensor analog input
 
@@ -45,7 +45,7 @@ static const uint8_t PIN_RELAY_PUMP         = PIN_RELAY_2;
 #define ULTRASONIC_READ_INTERVAL_MS     250UL
 #define MAX_ECHO_ULTRASONIC             ((WATER_LEVEL_MAX_DISTANCE_CM * 58UL * 12UL) / 10UL)  // ceil(cm*58*1.2) (20% margin)
 #define HARD_WATER_TDS_THRESHOLD        1500
-#define ULTRASONIC_FAILURE_THRESHOLD    100000   // Switch to failure state after 10 consecutive failures  
+#define ULTRASONIC_FAILURE_THRESHOLD    10   // Switch to failure state after 10 consecutive failures  
 
 // Sequence states
 enum SequenceState {
