@@ -99,6 +99,9 @@ void init_sensors(volatile SharedVariable &sv)
     TURN_OFF(PIN_RELAY_PUMP);
 
     Wire.begin();       // start I²C for ADS1115
+
+    // ultrasonic_init
+    ultrasonic_init();
     
     // Initialize OneWire temperature sensor
     temperatureSensor.begin();
@@ -331,86 +334,194 @@ void body_tds(volatile SharedVariable &sv)
 }
 
 /* ------------------------------------------------------------------ */
-/*  ───── ULTRASONIC BUCKET LEVEL                                    */
+/*  ───── ULTRASONIC BUCKET LEVEL — ISR version (3–40 cm band)       */
 /* ------------------------------------------------------------------ */
-enum UltrasonicState { 
-    ULTRASONIC_IDLE=0, 
-    ULTRASONIC_WAIT_HIGH=1, 
-    ULTRASONIC_WAIT_LOW=2 
+
+/*
+ * Ultrasonic sensor state machine
+ */
+
+enum UltrasonicState {
+  ULTRASONIC_IDLE=0,
+  ULTRASONIC_WAIT_HIGH=1,   // here: wait for FIRST edge after TRIG (polarity-agnostic)
+  ULTRASONIC_WAIT_LOW=2     // here: wait for SECOND edge (end of pulse)
 };
+
 static UltrasonicState ultrasonic_state = ULTRASONIC_IDLE;
 static unsigned long ultrasonic_next_ms = 0;
 static unsigned long ultrasonic_t_start = 0;
-static unsigned long ultrasonic_rise = 0;
 
-/**
- * State machine for tracking ultrasonic state
- * Used to avoid busy-waiting to allow Bluetooth events to be processed
- * Begins by sending a signal to TRIG, then waiting for a response
- * on the ECHO pin. Uses the time difference to get the distance.
- * Some responses may be missed, which is acceptable.
- */
+/* ---- Forced tunables for your 3–40 cm operating band ----
+   3 cm ≈ 174 µs, 40 cm ≈ 2320 µs (≈58 µs/cm)
+*/
+#define ECHO_START_TIMEOUT_US   6000UL   // rising/falling edge may appear ~2–3 ms after TRIG
+#define ECHO_PULSE_TIMEOUT_US   4000UL   // ~40–50 cm + margin
+#define ULTRASONIC_MIN_VALID_CM 3UL
+#define ULTRASONIC_MAX_VALID_CM 40UL
+
+/* ---- ISR-owned state (polarity-agnostic) ---- */
+static volatile bool          isrListening   = false; // capture edges only for current ping
+static volatile bool          isrStarted     = false; // saw first edge after TRIG
+static volatile bool          isrDone        = false; // saw second edge (pulse complete)
+static volatile bool          isrStartLevel  = false; // level at first edge
+static volatile unsigned long isrStartUs     = 0;     // timestamp of first edge
+static volatile unsigned long isrEndUs       = 0;     // timestamp of second edge
+
+/* ---- Edge ISR: captures timestamps without blocking ---- */
+void IRAM_ATTR ultrasonic_echo_isr() {
+  if (!isrListening) return;
+
+  const bool level = digitalRead(PIN_ULTRASONIC_ECHO);
+  const unsigned long t = micros();
+
+  if (!isrStarted) {                 // first edge after TRIG
+    isrStarted    = true;
+    isrStartLevel = level;
+    isrStartUs    = t;
+    isrDone       = false;
+  } else if (!isrDone && (level != isrStartLevel)) {
+    isrEndUs = t;                    // second edge = end of pulse
+    isrDone  = true;
+  }
+}
+
+/* ---- Call this once in setup() ---- */
+void ultrasonic_init() {
+  pinMode(PIN_ULTRASONIC_TRIG, OUTPUT);
+  pinMode(PIN_ULTRASONIC_ECHO, INPUT);    // ensure ECHO is level-shifted if sensor is 5V
+  digitalWrite(PIN_ULTRASONIC_TRIG, LOW);
+  attachInterrupt(digitalPinToInterrupt(PIN_ULTRASONIC_ECHO), ultrasonic_echo_isr, CHANGE);
+}
+
+/* ---- Non-blocking measurement state machine ---- */
 void body_ultrasonic(volatile SharedVariable &sv) {
   const unsigned long now_ms = millis();
-  const unsigned long now_us = micros();
 
   switch (ultrasonic_state) {
     case ULTRASONIC_IDLE: {
-      if (now_ms < ultrasonic_next_ms) return;
+      // Wrap-safe schedule gate
+      if ((long)(now_ms - ultrasonic_next_ms) < 0) return;
 
-      // 10 µs trigger (no busy loops beyond 12 µs)
+      // Arm ISR and fire a 10 µs TRIG pulse (active HIGH)
+      noInterrupts();
+      isrListening = true;
+      isrStarted   = false;
+      isrDone      = false;
+      interrupts();
+
       digitalWrite(PIN_ULTRASONIC_TRIG, LOW);  delayMicroseconds(2);
       digitalWrite(PIN_ULTRASONIC_TRIG, HIGH); delayMicroseconds(10);
       digitalWrite(PIN_ULTRASONIC_TRIG, LOW);
 
       ultrasonic_t_start = micros();
       ultrasonic_state   = ULTRASONIC_WAIT_HIGH;
-      ultrasonic_next_ms = now_ms + ULTRASONIC_READ_INTERVAL_MS;  // schedule next measurement cycle
+
+      // schedule next cycle
+      ultrasonic_next_ms = now_ms + ULTRASONIC_READ_INTERVAL_MS;
       return;
     }
 
     case ULTRASONIC_WAIT_HIGH: {
-      if (digitalRead(PIN_ULTRASONIC_ECHO)) {
-        ultrasonic_rise  = micros();
+      bool started = false;
+
+      noInterrupts();
+      started = isrStarted;          // saw the first edge (either polarity)?
+      interrupts();
+
+      if (started) {
         ultrasonic_state = ULTRASONIC_WAIT_LOW;
         return;
       }
-      if ((unsigned long)(micros() - ultrasonic_t_start) >= MAX_ECHO_ULTRASONIC) {
-        // No echo started within expected window, report error
+
+      // Timeout waiting for the first edge (module blanking can be ~2–3 ms)
+      if ((unsigned long)(micros() - ultrasonic_t_start) >= ECHO_START_TIMEOUT_US) {
         Serial.println(F("[ULTRASONIC] No echo started within expected window"));
         sv.ultrasonicFailureCount++;
         if (sv.ultrasonicFailureCount >= ULTRASONIC_FAILURE_THRESHOLD) {
           sv.sequenceState = SEQ_FAILURE_DETECTED;
           Serial.println(F("[ULTRASONIC] Too many failures, entering FAILURE_DETECTED state"));
         }
+        noInterrupts();
+        isrListening = false;
+        interrupts();
+        ultrasonic_state = ULTRASONIC_IDLE;
       }
       return;
     }
 
     case ULTRASONIC_WAIT_LOW: {
-      if (!digitalRead(PIN_ULTRASONIC_ECHO)) {
-        const unsigned long fall = micros();
-        const unsigned long width = (fall >= ultrasonic_rise) ? (fall - ultrasonic_rise) : 0UL;
+      bool done = false;
+      bool started = false;
+      unsigned long start_us = 0, end_us = 0;
 
-        // Convert µs → cm with integer math (rounded): cm ≈ width/58
-        const unsigned long cm = (width + 29UL) / 58UL;
+      noInterrupts();
+      done     = isrDone;
+      started  = isrStarted;
+      start_us = isrStartUs;
+      end_us   = isrEndUs;
+      interrupts();
 
-        // Update your flags (no floats needed)
+      if (done) {
+        // We have a complete pulse width
+        const unsigned long width = (end_us >= start_us) ? (end_us - start_us) : 0UL;
+
+        noInterrupts();
+        isrListening = false;   // stop listening until next TRIG
+        isrDone      = false;   // consume this measurement
+        isrStarted   = false;
+        interrupts();
+
+        if (width == 0UL) {
+          Serial.println(F("[ULTRASONIC] Invalid width (0), dropping reading"));
+          ultrasonic_state = ULTRASONIC_IDLE;
+          return;
+        }
+
+        // Convert µs → cm (rounded): cm ≈ width / 58
+        unsigned long cm = (width + 29UL) / 58UL;
+
+        // Sanity window for your operating band
+        if (cm < ULTRASONIC_MIN_VALID_CM || cm > ULTRASONIC_MAX_VALID_CM) {
+          Serial.print(F("[ULTRASONIC] Out-of-range distance: "));
+          Serial.print(cm);
+          Serial.println(F(" cm"));
+          sv.ultrasonicFailureCount++;
+          if (sv.ultrasonicFailureCount >= ULTRASONIC_FAILURE_THRESHOLD) {
+            sv.sequenceState = SEQ_FAILURE_DETECTED;
+            Serial.println(F("[ULTRASONIC] Too many failures, entering FAILURE_DETECTED state"));
+          }
+          ultrasonic_state = ULTRASONIC_IDLE;
+          return;
+        }
+
+        // Update flags vs your thresholds
         sv.waterLevelAboveThreshold = (cm <  WATER_LEVEL_HIGH_THRESHOLD_CM);
         sv.waterLevelBelowThreshold = (cm >  WATER_LEVEL_LOW_THRESHOLD_CM);
+
+        // Success resets failure streak
+        sv.ultrasonicFailureCount = 0;
+
+        Serial.print(F("[ULTRASONIC] Distance: "));
+        Serial.print(cm);
+        Serial.println(F(" cm"));
 
         ultrasonic_state = ULTRASONIC_IDLE;
         return;
       }
 
-      // Echo stayed high too long, report error
-      if ((unsigned long)(micros() - ultrasonic_rise) >= MAX_ECHO_ULTRASONIC) {
-        Serial.println(F("[ULTRASONIC] Echo stayed high too long"));
+      // Pulse still ongoing? timeout on width (treat as out-of-range)
+      if (started && (unsigned long)(micros() - start_us) >= ECHO_PULSE_TIMEOUT_US) {
+        Serial.println(F("[ULTRASONIC] Echo stayed high too long / out of range"));
         sv.ultrasonicFailureCount++;
         if (sv.ultrasonicFailureCount >= ULTRASONIC_FAILURE_THRESHOLD) {
           sv.sequenceState = SEQ_FAILURE_DETECTED;
           Serial.println(F("[ULTRASONIC] Too many failures, entering FAILURE_DETECTED state"));
         }
+        noInterrupts();
+        isrListening = false;
+        isrStarted   = false;
+        interrupts();
+        ultrasonic_state = ULTRASONIC_IDLE;
       }
       return;
     }

@@ -16,24 +16,24 @@
 
 // === Pin definitions ===
 // Inputs
-static const uint8_t PIN_BUTTON             = 12;
+static const uint8_t PIN_BUTTON             = D12;
 
-static const uint8_t PIN_ULTRASONIC_TRIG    = 6;
-static const uint8_t PIN_ULTRASONIC_ECHO    = 7;
+static const uint8_t PIN_ULTRASONIC_TRIG    = D6;
+static const uint8_t PIN_ULTRASONIC_ECHO    = D7;
 
-static const uint8_t PIN_TEMP_ONEWIRE       = 5;   // OneWire bus for temperature sensor
+static const uint8_t PIN_TEMP_ONEWIRE       = 8;  // Onewire, Nano ESP32 D5 converted to GPIO
 
 static const uint8_t PIN_TDS_ANALOG         = A0;  // TDS sensor analog input
 
 // Outputs
-static const uint8_t PIN_SMD_RED            = 9;   // PWM Supported
-static const uint8_t PIN_SMD_GRN            = 8;   // PWM Supported
-static const uint8_t PIN_SMD_BLU            = 10;  // PWM Supported
-static const uint8_t PIN_SMD_WHT            = 11;  // PWM Supported
+static const uint8_t PIN_SMD_RED            = D9;   // PWM Supported
+static const uint8_t PIN_SMD_GRN            = D8;   // PWM Supported
+static const uint8_t PIN_SMD_BLU            = D10;  // PWM Supported
+static const uint8_t PIN_SMD_WHT            = D11;  // PWM Supported
 
-static const uint8_t PIN_RELAY_3            = 4;
-static const uint8_t PIN_RELAY_2            = 3;
-static const uint8_t PIN_RELAY_1            = 2;
+static const uint8_t PIN_RELAY_3            = D4;
+static const uint8_t PIN_RELAY_2            = D3;
+static const uint8_t PIN_RELAY_1            = D2;
 static const uint8_t PIN_RELAY_N_O_VALVE    = PIN_RELAY_3;
 static const uint8_t PIN_RELAY_3_WAY_VALVE  = PIN_RELAY_1;
 static const uint8_t PIN_RELAY_PUMP         = PIN_RELAY_2;
@@ -80,6 +80,7 @@ extern volatile SharedVariable sv;
 // Function prototypes
 void init_shared_variable(volatile SharedVariable &sv);
 void init_sensors(volatile SharedVariable &sv);
+void ultrasonic_init();
 
 void body_button(volatile SharedVariable &sv);
 void body_led(volatile SharedVariable &sv);

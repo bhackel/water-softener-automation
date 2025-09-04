@@ -43,13 +43,13 @@ void loop()
     body_button(sv);
     body_sequence(sv);
     body_led(sv);
-    // body_ultrasonic(sv);
+    body_ultrasonic(sv);
     body_tds(sv);
     body_temperature(sv);
     body_persistent_log_to_database(sv);
 
     /* handle Bluetooth events ------------------------------------- */
-    // handleBluetoothEvents();               // from bluetooth_service.cpp
+    handleBluetoothEvents();               // from bluetooth_service.cpp
 
     delay(5);                              // small yield for BLE stack
 }
